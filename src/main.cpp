@@ -3,7 +3,7 @@
 void setup() {
   Serial.begin(74880);
   while (!Serial) {}
-  delay(5000);
+  delay(3000);
 
   Serial.print("\niDom Switch 2");
   Serial.printf("\nSwitch ID: %s", WiFi.macAddress().c_str());
@@ -19,10 +19,11 @@ void setup() {
 
   Serial.print("\n RTC initialization ");
   Wire.begin();
-  if (!RTC.begin()) {
+  if (RTC.begin()) {
+    Serial.print("completed");
+  } else {
     Serial.print("failed");
   }
-  Serial.print("completed");
 
   if (!RTC.isrunning()) {
     Serial.print("\n RTC is NOT running!");
@@ -45,7 +46,13 @@ void setup() {
     initiatingWPS();
   }
 
+  uprisingsCounter();
+
   setupLightsPins();
+
+  if (RTC.isrunning()) {
+    start = RTC.now().unixtime();
+  }
 }
 
 void interruptRoutine() {
@@ -86,7 +93,7 @@ void setupLightsPins() {
 void startRestServer() {
   server.on("/hello", HTTP_POST, handshake);
   server.on("/set", HTTP_PUT, receivedTheData);
-  server.on("/state", HTTP_GET, requestForStates);
+  server.on("/state", HTTP_GET, requestForState);
   server.begin();
   Serial.print("\nStarting the REST server");
 }
@@ -94,23 +101,30 @@ void startRestServer() {
 void handshake() {
   String reply;
   if (readData(server.arg("plain")) == -1) {
-    serialPrint("Identity confirmed");
+    serialPrint("Shake hands");
 
-    reply = "{\"id\":\"" +  WiFi.macAddress()
+    uint32_t active = 0;
+    if (RTC.isrunning()) {
+      active = RTC.now().unixtime() - start;
+    }
+
+    reply = "{\"id\":\"" + WiFi.macAddress()
     + "\",\"light\":" + statesOfLights()
     + ",\"smart\":\"" + smartString
     + "\",\"rtc\":" + RTC.isrunning()
-    + ",\"apds\":" + apds.init() + "}";
+    + ",\"active\":" + active
+    + ",\"uprisings\":" + uprisings
+    + ",\"adps\":" + apds.init() + "}";
   } else {
     reply = "0";
   }
   server.send(200, "text/plain", reply);
 }
 
-void requestForStates() {
-  String reply =  "{\"light\":" + statesOfLights() + "}";
+void requestForState() {
+  String reply =  "{\"state\":" + statesOfLights() + "}";
+
   server.send(200, "text/plain", reply);
-  readData(server.arg("plain"));
 }
 
 void receivedTheData() {
@@ -120,6 +134,7 @@ void receivedTheData() {
     return;
   }
   server.send(200, "text/plain", "Data has received");
+
   readData(server.arg("plain"));
 }
 
@@ -136,6 +151,8 @@ String statesOfLights() {
 
 
 void loop() {
+  server.handleClient();
+
   if (!adps_init) {
     initApds(false);
   }
@@ -148,26 +165,26 @@ void loop() {
     return;
   }
 
+  if (timeHasChanged()) {
+    if (!offline) {
+      getOnlineData();
+    }
+
+    checkSmart(false);
+  }
+
   if (WiFi.status() != WL_CONNECTED) {
     if (reconnect) {
       serialPrint("Reconnection with Wi-Fi");
-      connectingToWifi();
+      if (!connectingToWifi()) {
+        initiatingWPS();
+      }
     } else {
       if (initiatingWPS()) {
         setupLightsPins();
       }
     }
     return;
-  }
-
-  server.handleClient();
-
-  if (timeHasChanged()) {
-    if (!offline) {
-      getOnlineData();
-    }
-
-    checkSmart();
   }
 }
 
@@ -178,7 +195,7 @@ int readData(String payload) {
 
   if (!jsonObject.success()) {
     if (payload.length() > 0) {
-      Serial.print("\n" + payload);
+      Serial.print("\n " + payload);
       Serial.print("\n Parsing failed!");
     }
     return 0;
@@ -205,7 +222,7 @@ int readData(String payload) {
     twin = jsonObject["twin"].as<String>();
   }
 
-  if (jsonObject.containsKey("id") && jsonObject["id"].as<String>() == WiFi.macAddress()) {
+  if (jsonObject.containsKey("id") && jsonObject["id"].as<String>() == "idom") {
     return -1;
   }
 
@@ -226,7 +243,8 @@ int readData(String payload) {
   }
 
   if (jsonObject.containsKey("twilight")) {
-    twilight = !jsonObject["twilight"].as<bool>();
+    twilight = jsonObject["twilight"].as<bool>();
+    checkSmart(true);
   }
 
   return jsonObject.success();
@@ -242,6 +260,7 @@ void setSmart() {
   String lights;
   String days;
   bool onAtNight;
+  bool offAtDay;
   int onTime;
   int offTime;
 
@@ -281,26 +300,56 @@ void setSmart() {
       days += strContains(smart, "s") ? "s" : "";
 
       onAtNight = strContains(smart, "n");
+      offAtDay = strContains(smart, "d");
 
-      smartArray[i] = (Smart) {lights, days, onAtNight, onTime, offTime, 0};
+
+      smartArray[i] = (Smart) {lights, days, onAtNight, offAtDay, 0, onTime, offTime, 0};
     }
   }
 }
 
-void checkSmart() {
+void checkSmart(bool daynight) {
   if (!RTC.isrunning()) {
     return;
   }
 
   DateTime now = RTC.now();
   int currentTime = (now.hour() * 60) + now.minute();
-  bool result = false;
   String lights;
+  bool result = false;
 
   for (int i = 0; i < smartCount; i++) {
-    if (smartArray[i].lights.length() > 0) {
-      lights = statesOfLights();
+    result = false;
+    lights = statesOfLights();
 
+    // if (smartArray[i].lights.length() > 0) {
+
+    if (daynight) {
+      if (smartArray[i].onAtNight && twilight
+        && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()])
+        && (smartArray[i].blackout + 72000) < now.unixtime()) {
+          lights += strContains(smartArray[i].lights, "1") ? "1" : "";
+          lights += strContains(smartArray[i].lights, "2") ? "2" : "";
+          lights += strContains(smartArray[i].lights, "3") ? "3" : "";
+          result = true;
+          smartArray[i].blackout = now.unixtime();
+          serialPrint("The smart function activated the turn on at night");
+        }
+      if (smartArray[i].offAtDay && !twilight
+        && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek() - 1])) {
+          if (strContains(smartArray[i].lights, "1")) {
+            lights.replace("1", "");
+          }
+          if (strContains(smartArray[i].lights, "2")) {
+            lights.replace("2", "");
+          }
+          if (strContains(smartArray[i].lights, "3")) {
+            lights.replace("3", "");
+          }
+          result = true;
+          serialPrint("The smart function activated the turn off at day");
+        }
+    } else {
       if (smartArray[i].access + 60 < now.unixtime()) {
         if (smartArray[i].onTime == currentTime
           && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()])) {
@@ -311,7 +360,6 @@ void checkSmart() {
             smartArray[i].access = now.unixtime();
             serialPrint("The smart function activated the turn on time");
           }
-
         if (smartArray[i].offTime == currentTime
           && (strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()]) || (strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek() - 1]) && currentTime < 360))) {
             if (strContains(smartArray[i].lights, "1")) {
@@ -328,44 +376,18 @@ void checkSmart() {
             serialPrint("The smart function activated the turn off time");
           }
       }
+    }
 
-      if (smartArray[i].onAtNight
-        && (strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()]) || (strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek() - 1]) && currentTime < 600))) {
-          if (twilight && !blackout) {
-            lights += strContains(smartArray[i].lights, "1") ? "1" : "";
-            lights += strContains(smartArray[i].lights, "2") ? "2" : "";
-            lights += strContains(smartArray[i].lights, "3") ? "3" : "";
-            result = true;
-            blackout = true;
-            serialPrint("The smart function activated the turn on at night");
-          }
-          if (blackout && !twilight) {
-            if (strContains(smartArray[i].lights, "1")) {
-              lights.replace("1", "");
-            }
-            if (strContains(smartArray[i].lights, "2")) {
-              lights.replace("2", "");
-            }
-            if (strContains(smartArray[i].lights, "3")) {
-              lights.replace("3", "");
-            }
-            result = true;
-            blackout = false;
-            serialPrint("The smart function activated the turn off at day");
-          }
-        }
-
-      if (result) {
-        first_light = strContains(lights, "1");
-        second_light = strContains(lights, "2");
-        // third_light = strContains(lights, "3");
-
-        if (!offline) {
-          putDataOnServer("light=" + lights);
-        }
-
-        setLights("");
+    if (result) {
+      if (!offline) {
+        putDataOnServer("light=" + lights);
       }
+
+      first_light = strContains(lights, "1");
+      second_light = strContains(lights, "2");
+      // third_light = strContains(lights, "3");
+
+      setLights("");
     }
   }
 }
@@ -409,7 +431,7 @@ void handleGesture() {
 
     if (gesture == "NEAR" || gesture == "FAR") {
       if (offline) {
-        postToTwin("{\"coverage\":\"" + coverage + "\"}");
+        postToTwin("{\"coverage\":" + coverage + "}");
       } else {
         putDataOnServer("coverage=" + coverage);
       }

@@ -20,6 +20,8 @@ const String database = "idom";
 
 bool reconnect = false;
 uint32_t loopTime = 0;
+uint32_t start = 0;
+int uprisings = 1;
 
 bool offline = true;
 String twin = "0";
@@ -33,11 +35,11 @@ String smartString = "0";
 int smartCount = 0;
 
 bool twilight = false;
-bool blackout = false;
 
 bool strContains(String text, String value);
 bool timeHasChanged();
 void serialPrint(String text);
+void uprisingsCounter();
 void readOffset();
 void readSmart();
 String readFromSD(String file);
@@ -46,7 +48,7 @@ void writeOffset();
 void writeSmart();
 void writeWiFiConfiguration();
 void writeOnSD(String file, String value1, String value2, String text);
-void connectingToWifi();
+bool connectingToWifi();
 bool initiatingWPS();
 String get1Smart(String smartString, int index);
 void getOnlineData();
@@ -60,8 +62,7 @@ bool strContains(String text, String value) {
 
 bool timeHasChanged() {
   if (!RTC.isrunning()) {
-    delay(1000);
-    return true;
+    return false;
   }
 
   DateTime now = RTC.now();
@@ -94,11 +95,21 @@ void serialPrint(String text) {
 }
 
 
+void uprisingsCounter() {
+  String s = readFromSD("uprisings");
+  if (s != "-1") {
+    uprisings = s.toInt() + 1;
+  }
+
+  Serial.printf("\n Uprisings: %i", uprisings);
+  writeOnSD("uprisings", String(uprisings), "", "// Licznik uruchomień urządzenia.");
+}
+
 void readOffset() {
   String s = readFromSD("offset");
   if (s != "-1") {
     offset = s.toInt();
-    Serial.printf("\n Offset: %s", s.c_str());
+    Serial.printf("\n Offset: %i", offset);
   }
 }
 
@@ -106,7 +117,7 @@ void readSmart() {
   String s = readFromSD("smart");
   if (s != "-1") {
     smartString = s;
-    Serial.printf("\n Smart: %s", s.c_str());
+    Serial.printf("\n Smart: %s", smartString.c_str());
     setSmart();
   }
 }
@@ -218,9 +229,12 @@ void writeOnSD(String file, String value1, String value2, String comment) {
 }
 
 
-void connectingToWifi() {
+bool connectingToWifi() {
   serialPrint("Connecting to Wi-Fi");
 
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect();
+  delay(100);
   WiFi.begin(ssid.c_str(), password.c_str());
   int timeout = 0;
   while (timeout++ < 20 && WiFi.status() != WL_CONNECTED) {
@@ -235,8 +249,10 @@ void connectingToWifi() {
 
     startRestServer();
     reconnect = true;
+    return true;
   } else {
     Serial.print(" timed out");
+    return false;
   }
 }
 
@@ -319,11 +335,7 @@ void putDataOnServer(String values) {
 }
 
 void postToTwin(String values) {
-  if (WiFi.status() != WL_CONNECTED) {
-    return;
-  }
-
-  if (twin.length() < 2) {
+  if (WiFi.status() != WL_CONNECTED || twin.length() < 2) {
     return;
   }
 
@@ -332,6 +344,6 @@ void postToTwin(String values) {
   HTTP.begin("http://" + twin + "/set");
   HTTP.addHeader("Accept", "application/json, text/plain, */*");
   HTTP.addHeader("Content-Type", "application/json;charset=utf-8");
-  HTTP.POST(values);
+  HTTP.PUT(values);
   HTTP.end();
 }
