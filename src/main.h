@@ -1,9 +1,8 @@
 #include <Arduino.h>
 #include <SparkFun_APDS9960.h>
 
-const String device = "switch"; //blinds
+const String device = "switch";
 
-const int sd_pin = D8;
 const int apds9960_pin = D3;
 const int light_pin[] = {D0, D6, D7};
 
@@ -16,9 +15,9 @@ struct Smart {
   String days;
   bool onAtNight;
   bool offAtDay;
-  uint32_t blackout;
   int onTime;
   int offTime;
+  bool enabled;
   uint32_t access;
 };
 
@@ -27,15 +26,17 @@ bool second_light = false;
 bool third_light = false;
 
 void interruptRoutine();
-void initApds(bool beginning);
+void initApds();
 void setupLightsPins();
+void readSettings();
+void saveTheSettings();
+void sayHelloToTheServer() ;
 void startRestServer();
 void handshake();
 void requestForState();
-void receivedTheData();
-String statesOfLights();
-int readData(String payload);
+void readData(String payload, bool perWiFi);
 void setSmart();
-void checkSmart(bool daynight);
+void checkSmart(bool lightHasChanged);
+String statesOfLights();
 void handleGesture();
 void setLights(String gesture);
