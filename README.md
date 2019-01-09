@@ -1,5 +1,5 @@
 # Switch 2
-Oprogramowanie włącznika światła automatycznego domu. 
+Oprogramowanie włącznika światła automatycznego domu.
 
 ### Włącznik
 Całość zbudowana na WIFI D1 mini z modułem Data logger (RTC DS1307 + MicroSD), APDS-9960 oraz 2-kanałowym przekaźnikiem SSR.
@@ -8,7 +8,6 @@ Całość zbudowana na WIFI D1 mini z modułem Data logger (RTC DS1307 + MicroSD
 Łączność z włącznikiem odbywa się przez sieć Wi-Fi.
 Dane dostępowe do routera przechowywane są wraz z innymi informacjami na karcie pamięci. Pozwala to uniknąć przykrych niespodzianek po zaniku prądu i daje możliwość szybkiego kopiowania ustawień między urządzeniami.
 W przypadku braku informacji o sieci, urządzenie aktywuje wyszukiwania routera z wykorzystaniem funkcji WPS.
-Włącznik można ustawić w tryb online, wówczas będzie on sprawdzał dedykowany Webservice i możliwe stanie się sterowanie przez Internet.
 
 Włącznik automatycznie łączy się z zaprogramowaną siecią Wi-Fi w przypadku utraty połączenia.
 
@@ -24,6 +23,7 @@ Ustawienia automatyczne obejmują włączanie i wyłączanie światła o wybrane
 * 'n' włącz po zmroku / wyłącz o świcie
 * '_' włącz o godzinie - jeśli znak występuje w zapisie, przed nim znajduje się godzina w zapisie czasu uniksowego
 * '-' wyłącz o godzinie - jeśli występuje w zapisie, po nim znajduje się godzina w zapisie czasu uniksowego
+* '/' wyłącz ustawienie - obecność znaku wskazuje, że ustawienie będzie ignorowane
 
 Przykład zapisu trzech ustawień automatycznych: 1140_12w-420,4asn,1ouehrn-300
 
