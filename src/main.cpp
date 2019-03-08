@@ -165,6 +165,7 @@ void handshake() {
   + "\",\"rtc\":" + RTC.isrunning()
   + ",\"active\":" + (RTC.isrunning() ? (RTC.now().unixtime() - offset) - start : 0)
   + ",\"uprisings\":" + uprisings
+  + ",\"offline\":" + offline
   + ",\"adps\":" + apds.init() + "}";
 
   writeLog("Shake hands");
@@ -180,8 +181,9 @@ void requestForState() {
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
-    if (reconnect) {
+    if (ssid != "" && password != "") {
       writeLog("Reconnection with Wi-Fi");
+
       if (!connectingToWifi()) {
         initiatingWPS();
       }
