@@ -7,16 +7,19 @@ void setup() {
   SPIFFS.begin();
   Wire.begin();
 
-  writeLog("iDom Switch 2");
+  note("iDom Switch 2");
   Serial.print("\n Switch ID: " + WiFi.macAddress());
   Serial.printf("\n The switch is set to %s mode", offline ? "OFFLINE" : "ONLINE");
-  Serial.print("\n RTC initialization " + String(RTC.begin() ? "completed" : "failed!"));
+
+  sprintf(hostName, "blinds_%s", String(WiFi.macAddress()).c_str());
+  WiFi.hostname(hostName);
 
   readSettings();
-
+  RTC.begin();
   if (RTC.isrunning()) {
     start = RTC.now().unixtime() - offset;
   }
+  Serial.print("\n RTC initialization " + start != 0 ? "completed" : "failed!");
 
 
   pinMode(apds9960_pin, INPUT);
@@ -24,7 +27,7 @@ void setup() {
 
   initApds();
 
-  setupLightsPins();
+  setLightsPins();
 
   if (ssid != "" && password != "") {
     connectingToWifi();
@@ -52,7 +55,7 @@ void initApds() {
   }
 }
 
-void setupLightsPins() {
+void setLightsPins() {
   for (int i = 0; i < 3; i++) {
     pinMode(light_pin[i], OUTPUT);
     digitalWrite(light_pin[i], HIGH);
@@ -63,7 +66,7 @@ void setupLightsPins() {
 void readSettings() {
   File file = SPIFFS.open("/settings.txt", "r");
   if (!file) {
-    writeLog("The settings file can not be read");
+    note("The settings file cannot be read");
     return;
   }
 
@@ -72,7 +75,7 @@ void readSettings() {
   file.close();
 
   if (!jsonObject.success()) {
-    writeLog("Settings file error");
+    note("Settings file error:\n" + file.readString());
     return;
   }
 
@@ -102,12 +105,12 @@ void readSettings() {
 
   String logs;
   jsonObject.printTo(logs);
-  writeLog("The settings file was read:\n " + logs);
+  note("The settings file has been read:\n " + logs);
 
-  saveTheSettings();
+  saveSettings();
 }
 
-void saveTheSettings() {
+void saveSettings() {
   DynamicJsonBuffer jsonBuffer(JSON_OBJECT_SIZE(3));
   JsonObject& jsonObject = jsonBuffer.createObject();
 
@@ -122,9 +125,9 @@ void saveTheSettings() {
   if (writeObjectToFile("settings", jsonObject)) {
     String logs;
     jsonObject.printTo(logs);
-    writeLog("Saving settings:\n " + logs);
+    note("Saving settings:\n " + logs);
   } else {
-    writeLog("Saving settings failed!");
+    note("Saving the settings failed!");
   }
 }
 
@@ -144,15 +147,23 @@ void sayHelloToTheServer() {
   }
 }
 
-void startRestServer() {
+void startServices() {
   server.on("/hello", HTTP_POST, handshake);
   server.on("/set", HTTP_PUT, receivedTheData);
   server.on("/state", HTTP_GET, requestForState);
+  server.on("/basicdata", HTTP_GET, requestForBasicData);
   server.on("/log", HTTP_GET, requestForLogs);
   server.on("/log", HTTP_DELETE, clearLogs);
   server.on("/deletewifisettings", HTTP_DELETE, deleteWiFiSettings);
   server.begin();
-  Serial.print("\n Starting the REST server");
+
+  note("Launch of services. MDNS responder " + String(hostName) + MDNS.begin(hostName) ? " started " : " unsuccessful! ");
+
+  MDNS.addService("idom", "tcp", 8080);
+
+  if (!RTC.isrunning()) {
+    getBasicData();
+  }
 }
 
 void handshake() {
@@ -163,12 +174,12 @@ void handshake() {
   + ",\"value\":" + statesOfLights()
   + ",\"smart\":\"" + smartString
   + "\",\"rtc\":" + RTC.isrunning()
-  + ",\"active\":" + (RTC.isrunning() ? (RTC.now().unixtime() - offset) - start : 0)
+  + ",\"active\":" + (RTC.isrunning() ? RTC.now().unixtime() - offset - start : 0)
   + ",\"uprisings\":" + uprisings
   + ",\"offline\":" + offline
   + ",\"adps\":" + apds.init() + "}";
 
-  writeLog("Shake hands");
+  note("Shake hands");
   server.send(200, "text/plain", reply);
 }
 
@@ -178,11 +189,17 @@ void requestForState() {
   server.send(200, "text/plain", reply);
 }
 
+void requestForBasicData() {
+  String reply = "{\"time\":" + String(RTC.now().unixtime() - offset);
+
+  server.send(200, "text/plain", reply + "}");
+}
+
 
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     if (ssid != "" && password != "") {
-      writeLog("Reconnection with Wi-Fi");
+      note("Reconnection with Wi-Fi");
 
       if (!connectingToWifi()) {
         initiatingWPS();
@@ -193,6 +210,7 @@ void loop() {
   }
 
   server.handleClient();
+  MDNS.update();
 
   if (isr_flag == 1) {
     detachInterrupt(apds9960_pin);
@@ -239,14 +257,16 @@ void readData(String payload, bool perWiFi) {
   if (jsonObject.containsKey("offset")) {
     int newOffset = jsonObject["offset"].as<int>();
     if (offset != newOffset) {
-      newTime = now.unixtime() - offset;
+      if (RTC.isrunning()) {
+        newTime = now.unixtime() - offset;
+      }
       offset = newOffset;
 
       if (!jsonObject.containsKey("time") && RTC.isrunning()) {
         newTime = newTime + offset;
         if (abs(newTime - now.unixtime()) > 10) {
           RTC.adjust(DateTime(newTime));
-          writeLog("Adjust time");
+          note("Adjust time");
         }
       }
 
@@ -254,11 +274,17 @@ void readData(String payload, bool perWiFi) {
     }
   }
 
-  if (jsonObject.containsKey("time") && RTC.isrunning()) {
+  if (jsonObject.containsKey("time")) {
     newTime = jsonObject["time"].as<uint32_t>() + offset;
-    if (abs(newTime - now.unixtime()) > 10) {
+    if (RTC.isrunning()) {
+      if (abs(newTime - now.unixtime()) > 10) {
+        RTC.adjust(DateTime(newTime));
+        note("Adjust time");
+      }
+    } else {
       RTC.adjust(DateTime(newTime));
-      writeLog("Adjust time");
+      start = RTC.now().unixtime() - offset;
+      note("Adjust time");
     }
   }
 
@@ -266,13 +292,6 @@ void readData(String payload, bool perWiFi) {
     uint32_t newUpdateTime = jsonObject["up"].as<uint32_t>();
     if (updateTime < newUpdateTime) {
       updateTime = newUpdateTime;
-    }
-  }
-
-  if (jsonObject.containsKey("twin")) {
-    String newTwin = jsonObject["twin"].as<String>();
-    if (twin != newTwin) {
-      twin = newTwin;
     }
   }
 
@@ -298,18 +317,22 @@ void readData(String payload, bool perWiFi) {
   }
 
   if (jsonObject.containsKey("twilight")) {
-    String newTwilight = jsonObject["twilight"].as<String>();
-    if (strContains(newTwilight, ",")) {
-      twilight = strContains(newTwilight.substring(0, newTwilight.indexOf(",")), "1");
+    bool newTwilight;
+    String newStringTwilight = jsonObject["twilight"].as<String>();
+    if (strContains(newStringTwilight, ",")) {
+      newTwilight = strContains(newStringTwilight.substring(0, newStringTwilight.indexOf(",")), "1");
     } else {
-      twilight = strContains(newTwilight, "1");
+      newTwilight = strContains(newStringTwilight, "1");
     }
-    checkSmart(true);
+    if (twilight != newTwilight) {
+      twilight = newTwilight;
+      checkSmart(true);
+    }
   }
 
   if (settingsChange) {
-    writeLog("Received the data:\n " + payload);
-    saveTheSettings();
+    note("Received the data:\n " + payload);
+    saveSettings();
   }
   if (perWiFi && result.length() > 0) {
     putDataOnline("detail", result);
@@ -400,7 +423,7 @@ void checkSmart(bool lightHasChanged) {
           if (light != newLights) {
             light = newLights;
             result = true;
-            writeLog("The smart function activated the turn on at night");
+            note("The smart function activated the turn on at night");
           }
         }
         if (smartArray[i].offAtDay && !twilight && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek() - 1])) {
@@ -417,7 +440,7 @@ void checkSmart(bool lightHasChanged) {
           if (light != newLights) {
             light = newLights;
             result = true;
-            writeLog("The smart function activated the turn off at day");
+            note("The smart function activated the turn off at day");
           }
         }
       } else {
@@ -430,7 +453,7 @@ void checkSmart(bool lightHasChanged) {
             if (light != newLights) {
               light = newLights;
               result = true;
-              writeLog("The smart function activated the turn on time");
+              note("The smart function activated the turn on time");
             }
           }
           if (smartArray[i].offTime == currentTime) {
@@ -448,7 +471,7 @@ void checkSmart(bool lightHasChanged) {
             if (light != newLights) {
               light = newLights;
               result = true;
-              writeLog("The smart function activated the turn off time");
+              note("The smart function activated the turn off time");
             }
           }
         }
@@ -491,19 +514,19 @@ void handleGesture() {
       case DIR_NEAR:
         gesture = "NEAR";
         coverage = "100";
-        writeLog("Blinds changed state to 100% by a gesture to the NEAR");
+        note("Blinds changed state to 100% by a gesture to the NEAR");
         break;
       case DIR_FAR:
         gesture = "FAR";
         coverage = "0";
-        writeLog("Blinds changed state to 0% by a gesture to the FAR");
+        note("Blinds changed state to 0% by a gesture to the FAR");
         break;
       default:
         break;
     }
 
     if (gesture == "NEAR" || gesture == "FAR") {
-      postDataToTheTwin("{\"val\":" + coverage + "}");
+      putOfflineData("{\"val\":" + coverage + "}");
       putDataOnline("detail", "blinds=" + coverage);
     } else {
       setLights(gesture);
@@ -514,17 +537,17 @@ void handleGesture() {
 
 void setLights(String gesture) {
   if (digitalRead(light_pin[0]) == first_light) {
-    writeLog("First light changed state to " + String(first_light));
+    note("First light changed state to " + String(first_light));
   }
   digitalWrite(light_pin[0], first_light ? LOW : HIGH);
 
   if (digitalRead(light_pin[1]) == second_light) {
-    writeLog("Second light changed state to " + String(second_light));
+    note("Second light changed state to " + String(second_light));
   }
   digitalWrite(light_pin[1], second_light ? LOW : HIGH);
 
  // if (digitalRead(light_pin[2]) == third_light) {
- //   writeLog("Third light changed state to " + String(third_light));
+ //   note("Third light changed state to " + String(third_light));
  // }
  // digitalWrite(light_pin[2], third_light ? LOW : HIGH);
 

@@ -27,13 +27,14 @@ bool third_light = false;
 
 void interruptRoutine();
 void initApds();
-void setupLightsPins();
+void setLightsPins();
 void readSettings();
-void saveTheSettings();
+void saveSettings();
 void sayHelloToTheServer() ;
-void startRestServer();
+void startServices();
 void handshake();
 void requestForState();
+void requestForBasicData();
 void readData(String payload, bool perWiFi);
 void setSmart();
 void checkSmart(bool lightHasChanged);
