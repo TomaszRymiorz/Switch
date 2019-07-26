@@ -38,6 +38,6 @@ Sterowanie włącznikiem odbywa się poprzez wykorzystanie metod dostępnych w p
 
 * "/basicdata" - Służy innym urządzeniom systemu iDom do samokontroli. Jeśli któreś urządzenie po uruchomieniu nie pamięta aktualnej godziny lub nie posiada czujnika światła, ta funkcja zwraca aktualną godzinę i dane z czujnika.
 
-* "/deletewifisettings" - Ten adres służy do usunięcia danych dostępowych do routera.
+* "/delete/wifisettings" - Ten adres służy do usunięcia danych dostępowych do routera.
 
 * "/log" - Pod tym adresem znajduje się dziennik aktywności urządzenia.

@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <SparkFun_APDS9960.h>
 
-const String device = "switch";
+const char device[7] = "switch";
 
 const int apds9960_pin = D3;
 const int light_pin[] = {D0, D6, D7};
@@ -28,7 +28,7 @@ bool third_light = false;
 void interruptRoutine();
 void initApds();
 void setLightsPins();
-void readSettings();
+bool readSettings(bool backup);
 void saveSettings();
 void sayHelloToTheServer() ;
 void startServices();
@@ -37,7 +37,7 @@ void requestForState();
 void requestForBasicData();
 void readData(String payload, bool perWiFi);
 void setSmart();
-void checkSmart(bool lightHasChanged);
+void checkSmart(bool lightChanged);
 String statesOfLights();
 void handleGesture();
 void setLights(String gesture);
