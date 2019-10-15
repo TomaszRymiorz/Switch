@@ -1,4 +1,4 @@
-#include "core.h"
+#include "c_online.h"
 
 void setup() {
   Serial.begin(115200);
@@ -6,6 +6,8 @@ void setup() {
 
   SPIFFS.begin();
   Wire.begin();
+
+  keepLog = SPIFFS.exists("/log.txt");
 
   note("iDom Switch 2");
   Serial.print("\nSwitch ID: " + WiFi.macAddress());
@@ -67,19 +69,30 @@ void setLightsPins() {
 }
 
 
+String statesOfLights() {
+  String result = first_light ? "1" : "";
+  result += second_light ? "2" : "";
+  result += third_light ? "3" : "";
+  if (result.length() == 0) {
+    return "0";
+  }
+  return result;
+}
+
+
 bool readSettings(bool backup) {
   File file = SPIFFS.open(backup ? "/backup.txt" : "/settings.txt", "r");
   if (!file) {
-    note("The " + String(backup ? "backup" : "settings") + " file cannot be read.");
+    note("The " + String(backup ? "backup" : "settings") + " file cannot be read");
     return false;
   }
 
-  DynamicJsonBuffer jsonBuffer(JSON_OBJECT_SIZE(3));
-  JsonObject& jsonObject = jsonBuffer.parseObject(file.readString());
+  DynamicJsonDocument jsonObject(1024);
+  deserializeJson(jsonObject, file.readString());
   file.close();
 
-  if (!jsonObject.success()) {
-    note(String(backup ? "Backup" : "Settings") + " file error.");
+  if (jsonObject.isNull()) {
+    note(String(backup ? "Backup" : "Settings") + " file error");
     return false;
   }
 
@@ -108,8 +121,8 @@ bool readSettings(bool backup) {
   }
 
   String logs;
-  jsonObject.printTo(logs);
-  note("The " + String(backup ? "backup" : "settings") + " file has been read:\n " + logs);
+  serializeJson(jsonObject, logs);
+  note("Reading the " + String(backup ? "backup" : "settings") + " file:\n " + logs);
 
   saveSettings();
 
@@ -117,8 +130,7 @@ bool readSettings(bool backup) {
 }
 
 void saveSettings() {
-  DynamicJsonBuffer jsonBuffer(JSON_OBJECT_SIZE(3));
-  JsonObject& jsonObject = jsonBuffer.createObject();
+  DynamicJsonDocument jsonObject(1024);
 
   jsonObject["ssid"] = ssid;
   jsonObject["password"] = password;
@@ -131,7 +143,7 @@ void saveSettings() {
 
   if (writeObjectToFile("settings", jsonObject)) {
     String logs;
-    jsonObject.printTo(logs);
+    serializeJson(jsonObject, logs);
     note("Saving settings:\n " + logs);
 
     writeObjectToFile("backup", jsonObject);
@@ -142,40 +154,33 @@ void saveSettings() {
 
 
 void sayHelloToTheServer() {
-  // if (offline) {
-  //   return;
-  // }
-  //
-  // String request = "ip=" + WiFi.localIP().toString()
-  // + "&deets=" + RTC.isrunning() + "," + startTime + "," + uprisings + "," + adps_init + "," + version;
-  //
-  // if (sendingError) {
-  //   request += "&val=" + statesOfLights();
-  //
-  //   putOnlineData("detail", request);
-  // } else {
-  //   putOnlineData("rooms", request);
-  // }
+  // This function is only available with a ready-made iDom device.
+}
+
+void introductionToServer() {
+  // This function is only available with a ready-made iDom device.
 }
 
 void startServices() {
   server.on("/hello", HTTP_POST, handshake);
-  server.on("/set", HTTP_PUT, receivedTheData);
+  server.on("/set", HTTP_PUT, receivedOfflineData);
   server.on("/state", HTTP_GET, requestForState);
   server.on("/basicdata", HTTP_GET, requestForBasicData);
   server.on("/log", HTTP_GET, requestForLogs);
-  server.on("/log", HTTP_DELETE, clearLogs);
-  server.on("/admin/onlineswitch", HTTP_POST, onlineSwitch);
-  server.on("/admin/delete/wifisettings", HTTP_DELETE, deleteWiFiSettings);
+  server.on("/log", HTTP_DELETE, clearTheLog);
+  server.on("/admin/log", HTTP_POST, activationTheLog);
+  server.on("/admin/log", HTTP_DELETE, deactivationTheLog);
+  server.on("/admin/wifisettings", HTTP_DELETE, deleteWiFiSettings);
   server.begin();
 
-  note("Launch of services. MDNS responder " + String(hostName) + (MDNS.begin(hostName) ? " started." : " unsuccessful!"));
+  note("Launch of services. " + String(hostName) + (MDNS.begin(hostName) ? " started." : " unsuccessful!"));
 
   MDNS.addService("idom", "tcp", 8080);
 
-  if (!RTC.isrunning()) {
-    getOfflineData();
+  if (!offline) {
+    prime = true;
   }
+  getOfflineData(true);
 }
 
 void handshake() {
@@ -189,6 +194,7 @@ void handshake() {
   + ",\"active\":" + (startTime != 0 ? RTC.now().unixtime() - offset - startTime : 0)
   + ",\"uprisings\":" + uprisings
   + ",\"offline\":" + offline
+  + ",\"prime\":" + prime
   + ",\"adps\":" + apds.init() + "}";
 
   Serial.print("\nHandshake");
@@ -202,10 +208,9 @@ void requestForState() {
 }
 
 void requestForBasicData() {
-  String reply = "{\"time\":" + String(RTC.now().unixtime() - offset)
-  + "}";
+  String reply = RTC.isrunning() ? ("\"time\":" + String(RTC.now().unixtime() - offset)) : "";
 
-  server.send(200, "text/plain", reply);
+  server.send(200, "text/plain", "{" + reply + "}");
 }
 
 
@@ -222,29 +227,17 @@ void loop() {
   }
 
   if (hasTimeChanged()) {
-    if (loopTime % 2 == 0) {
+    if (!checkSmart(false) && loopTime % 2 == 0) {
       getOnlineData();
-    }
-    checkSmart(false);
+    };
   }
-}
-
-
-String statesOfLights() {
-  String result = first_light ? "1" : "";
-  result += second_light ? "2" : "";
-  result += third_light ? "3" : "";
-  if (result.length() == 0) {
-    return "0";
-  }
-  return result;
 }
 
 void readData(String payload, bool perWiFi) {
-  DynamicJsonBuffer jsonBuffer(JSON_OBJECT_SIZE(3));
-  JsonObject& jsonObject = jsonBuffer.parseObject(payload);
+  DynamicJsonDocument jsonObject(1024);
+  deserializeJson(jsonObject, payload);
 
-  if (!jsonObject.success()) {
+  if (jsonObject.isNull()) {
     if (payload.length() > 0) {
       Serial.print("\n Parsing failed!");
     }
@@ -265,7 +258,7 @@ void readData(String payload, bool perWiFi) {
 
       if (RTC.isrunning() && !jsonObject.containsKey("time")) {
         newTime = newTime + offset;
-        if (abs(newTime - RTC.now().unixtime()) > 10) {
+        if (abs(newTime - RTC.now().unixtime()) > 60) {
           RTC.adjust(DateTime(newTime));
           note("Adjust time");
         }
@@ -279,7 +272,7 @@ void readData(String payload, bool perWiFi) {
     newTime = jsonObject["time"].as<uint32_t>() + offset;
     if (newTime > 1546304461) {
       if (RTC.isrunning()) {
-        if (abs(newTime - RTC.now().unixtime()) > 10) {
+        if (abs(newTime - RTC.now().unixtime()) > 60) {
           RTC.adjust(DateTime(newTime));
           note("Adjust time");
         }
@@ -287,6 +280,7 @@ void readData(String payload, bool perWiFi) {
         RTC.adjust(DateTime(newTime));
         startTime = RTC.now().unixtime() - offset;
         note("Adjust time");
+        sayHelloToTheServer();
       }
     }
   }
@@ -319,12 +313,16 @@ void readData(String payload, bool perWiFi) {
     }
   }
 
-  if (jsonObject.containsKey("twilight")) {
-    bool newTwilight = jsonObject["twilight"].as<bool>();
-    if (twilight != newTwilight) {
-      twilight = newTwilight;
+  if (jsonObject.containsKey("light")) {
+    String newLight = jsonObject["light"].as<String>();
+    if (twilight != strContains(newLight, "t")) {
+      twilight = !twilight;
       checkSmart(true);
     }
+  }
+
+  if (jsonObject.containsKey("prime")) {
+    prime = false;
   }
 
   if (settingsChange) {
@@ -365,7 +363,7 @@ void setSmart() {
 
   for (int i = 0; i < smartCount; i++) {
     smart = get1Smart(i);
-    if (smart.length() > 0 && !strContains(smart, "b")) {
+    if (smart.length() > 0 && strContains(smart, "l")) {
       enabled = !strContains(smart, "/");
       smart = !enabled ? smart.substring(0, smart.indexOf("/")) : smart;
 
@@ -380,7 +378,7 @@ void setSmart() {
       lights += strContains(smart, "2") ? "2" : "";
       lights += strContains(smart, "3") ? "3" : "";
 
-      days = strContains(smart, "w") ? "ouehras" : "";
+      days = strContains(smart, "w") ? "w" : "";
       days += strContains(smart, "o") ? "o" : "";
       days += strContains(smart, "u") ? "u" : "";
       days += strContains(smart, "e") ? "e" : "";
@@ -397,22 +395,18 @@ void setSmart() {
   }
 }
 
-void checkSmart(bool lightChanged) {
-  if (!RTC.isrunning()) {
-    return;
-  }
-
+bool checkSmart(bool lightChanged) {
   String newLights = statesOfLights();
   bool result = false;
   DateTime now = RTC.now();
-  int currentTime = (now.hour() * 60) + now.minute();
-  String log = "The smart function has";
+  String log = "The smart function has activated ";
 
   int i = -1;
   while (++i < smartCount) {
     if (smartArray[i].enabled) {
       if (lightChanged) {
-        if (twilight && smartArray[i].onAtNight && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()])) {
+        if (twilight && smartArray[i].onAtNight
+          && (strContains(smartArray[i].days, "w") || (RTC.isrunning() && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()])))) {
           if (strContains(smartArray[i].lights, "1") && !strContains(newLights, "1")) {
             newLights += "1";
           }
@@ -423,9 +417,10 @@ void checkSmart(bool lightChanged) {
             newLights += "3";
           }
           result = true;
-          log += " activated the turn on at night";
+          log += "the turn on at night";
         }
-        if (!twilight && smartArray[i].offAtDay && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek() != 0 ? now.dayOfTheWeek() - 1 : now.dayOfTheWeek() + 6])) {
+        if (!twilight && smartArray[i].offAtDay
+          && (strContains(smartArray[i].days, "w") || (RTC.isrunning() && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek() != 0 ? now.dayOfTheWeek() - 1 : now.dayOfTheWeek() + 6])))) {
           if (strContains(smartArray[i].lights, "1")) {
             newLights.replace("1", "");
           }
@@ -436,37 +431,40 @@ void checkSmart(bool lightChanged) {
             newLights.replace("3", "");
           }
           result = true;
-          log += " activated the turn off at day";
+          log += "the turn off at day";
         }
       } else {
-        if (smartArray[i].access + 60 < now.unixtime()) {
-          if (smartArray[i].onTime == currentTime && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()])) {
-            smartArray[i].access = now.unixtime();
-            if (strContains(smartArray[i].lights, "1") && !strContains(newLights, "1")) {
-              newLights += "1";
+        if (RTC.isrunning()) {
+          int currentTime = (now.hour() * 60) + now.minute();
+          if (smartArray[i].access + 60 < now.unixtime()) {
+            if (smartArray[i].onTime == currentTime && strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()])) {
+              smartArray[i].access = now.unixtime();
+              if (strContains(smartArray[i].lights, "1") && !strContains(newLights, "1")) {
+                newLights += "1";
+              }
+              if (strContains(smartArray[i].lights, "2") && !strContains(newLights, "2")) {
+                newLights += "2";
+              }
+              if (strContains(smartArray[i].lights, "3") && !strContains(newLights, "3")) {
+                newLights += "3";
+              }
+              result = true;
+              log += "the turn on at time";
             }
-            if (strContains(smartArray[i].lights, "2") && !strContains(newLights, "2")) {
-              newLights += "2";
+            if (smartArray[i].offTime == currentTime && (strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()]) || strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek() != 0 ? now.dayOfTheWeek() - 1 : now.dayOfTheWeek() + 6]))) {
+              smartArray[i].access = now.unixtime();
+              if (strContains(smartArray[i].lights, "1")) {
+                newLights.replace("1", "");
+              }
+              if (strContains(smartArray[i].lights, "2")) {
+                newLights.replace("2", "");
+              }
+              if (strContains(smartArray[i].lights, "3")) {
+                newLights.replace("3", "");
+              }
+              result = true;
+              log += "the turn off at time";
             }
-            if (strContains(smartArray[i].lights, "3") && !strContains(newLights, "3")) {
-              newLights += "3";
-            }
-            result = true;
-            log += " activated the turn on at time";
-          }
-          if (smartArray[i].offTime == currentTime && (strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek()]) || strContains(smartArray[i].days, daysOfTheWeek[now.dayOfTheWeek() != 0 ? now.dayOfTheWeek() - 1 : now.dayOfTheWeek() + 6]))) {
-            smartArray[i].access = now.unixtime();
-            if (strContains(smartArray[i].lights, "1")) {
-              newLights.replace("1", "");
-            }
-            if (strContains(smartArray[i].lights, "2")) {
-              newLights.replace("2", "");
-            }
-            if (strContains(smartArray[i].lights, "3")) {
-              newLights.replace("3", "");
-            }
-            result = true;
-            log += " activated the turn off at time";
           }
         }
       }
@@ -486,6 +484,8 @@ void checkSmart(bool lightChanged) {
       note("The smart function hasn't activated anything.");
     }
   }
+
+  return result;
 }
 
 void handleGesture() {
@@ -511,12 +511,12 @@ void handleGesture() {
         // break;
       case DIR_NEAR:
         gesture = "NEAR";
-        coverage = "100";
+        coverage = "100.100.100";
         note("Blinds changed state to 100% by a gesture to the NEAR");
         break;
       case DIR_FAR:
         gesture = "FAR";
-        coverage = "0";
+        coverage = "0.0.0";
         note("Blinds changed state to 0% by a gesture to the FAR");
         break;
       default:
@@ -524,7 +524,7 @@ void handleGesture() {
     }
 
     if (gesture == "NEAR" || gesture == "FAR") {
-      putOfflineData("{\"val\":" + coverage + "}");
+      putMultiOfflineData("{\"val\":\"" + coverage + "\"}");
       putOnlineData("detail", "blinds=" + coverage);
     } else {
       setLights(gesture);
