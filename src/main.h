@@ -39,6 +39,6 @@ void requestForState();
 void requestForBasicData();
 void readData(String payload, bool perWiFi);
 void setSmart();
-bool checkSmart(bool lightChanged);
+bool automaticSettings(bool lightChanged);
 void handleGesture();
 void setLights(String gesture);
