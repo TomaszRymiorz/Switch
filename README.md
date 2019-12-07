@@ -1,4 +1,4 @@
-# Switch 2
+# Switch
 Oprogramowanie włącznika światła automatycznego domu.
 
 ### Budowa włącznika
