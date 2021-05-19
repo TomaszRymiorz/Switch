@@ -2,7 +2,7 @@
 Oprogramowanie włącznika światła automatycznego domu.
 
 ### Budowa włącznika
-Całość zbudowana w oparciu o ESP8266 wraz z modułem RTC DS1307 oraz APDS-9960. Całości dopełnia 2-kanałowy przekaźnik SSR.
+Całość zbudowana w oparciu o ESP8266 wraz z modułem czujnika dotyku.
 
 ### Możliwości
 Łączność z włącznikiem odbywa się przez sieć Wi-Fi.
@@ -11,9 +11,7 @@ W przypadku braku informacji o sieci, urządzenie aktywuje wyszukiwania routera 
 
 Włącznik automatycznie łączy się z zaprogramowaną siecią Wi-Fi w przypadku utraty połączenia.
 
-Zawiera czujnik gestów wykorzystywany do sterowania oświetleniem bez udziału dedykowanej aplikacji. Gestem można również opuścić lub podnieść wszystkie rolety systemu iDom podłączonych do tej samej sieci Wi-Fi.
-
-Zegar czasu rzeczywistego wykorzystywany jest przez funkcję ustawień automatycznych.
+Programowy zegar czasu rzeczywistego wykorzystywany jest przez funkcję ustawień automatycznych.
 Ustawienia automatyczne obejmują włączanie i wyłączanie światła o wybranej godzinie oraz włączanie po zapadnięciu zmroku i wyłączanie o świcie. Powtarzalność obejmuje okres jednego tygodnia, a ustawienia nie są ograniczone ilościowo. W celu zminimalizowania objętości wykorzystany został zapis tożsamy ze zmienną boolean, czyli dopiero wystąpienie znaku wskazuje na włączoną funkcję.
 
 * '4' wszystkie światła, którymi steruje włącznik - występuje tylko w zapisie aplikacji w celu zminimalizowania ilości przesyłanych danych
@@ -37,7 +35,5 @@ Sterowanie włącznikiem odbywa się poprzez wykorzystanie metod dostępnych w p
 * "/state" - Służy do regularnego odpytywania włącznika o jego podstawowy stan, włączone światła.
 
 * "/basicdata" - Służy innym urządzeniom systemu iDom do samokontroli. Jeśli któreś urządzenie po uruchomieniu nie pamięta aktualnej godziny lub nie posiada czujnika światła, ta funkcja zwraca aktualną godzinę i dane z czujnika.
-
-* "/wifisettings" - Ten adres służy do usunięcia danych dostępowych do routera.
 
 * "/log" - Pod tym adresem znajduje się dziennik aktywności urządzenia.
