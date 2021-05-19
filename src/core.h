@@ -1,78 +1,101 @@
 #include <Wire.h>
 #include <SPI.h>
-#include <FS.h>
+#include <LittleFS.h>
 #include <RTClib.h>
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266mDNS.h>
 #include <ArduinoJson.h>
+#include <ArduinoOTA.h>
 #include "main.h"
 
-RTC_DS1307 RTC;
+// RTC_DS1307 RTC;
+RTC_Millis RTC;
+
 ESP8266WebServer server(80);
 HTTPClient HTTP;
+WiFiClient WIFI;
 
-const int version = 11;
+// core version = 18;
 bool offline = true;
-bool keepLog = false;
+bool keep_log = false;
 
-const char daysOfTheWeek[7][12] = {"s", "o", "u", "e", "h", "r", "a"};
-char hostName[30] = {0};
+const char days_of_the_week[7][2] = {"s", "o", "u", "e", "h", "r", "a"};
+char host_name[30] = {0};
+String devices = "";
 
 String ssid = "";
 String password = "";
 
-uint32_t startTime = 0;
-uint32_t loopTime = 0;
+uint32_t start_time = 0;
+uint32_t loop_time = 0;
 int uprisings = 1;
 int offset = 0;
 bool dst = false;
-bool twilight = false;
 
-String smartString = "0";
-Smart *smartArray;
-int smartCount = 0;
+String smart_string = "0";
+Smart *smart_array;
+int smart_count = 0;
+
+String geo_location = "0";
+int last_sun_check = -1;
+int next_sunset = -1;
+int next_sunrise = -1;
+bool also_sensors = false;
+
+int dusk_delay = 0;
+int dawn_delay = 0;
 
 bool strContains(String text, String value);
+bool strContains(int text, String value);
+bool RTCisrunning();
 bool hasTimeChanged();
 void note(String text);
 bool writeObjectToFile(String name, DynamicJsonDocument object);
-String get1Smart(int index);
+String get1(String text, int index);
+String getSmartString();
 void connectingToWifi();
 void initiatingWPS();
 void activationTheLog();
 void deactivationTheLog();
 void requestForLogs();
 void clearTheLog();
-void deleteWiFiSettings();
-void deleteDeviceMemory();
+void getSunriseSunset(int day);
+int findMDNSDevices();
 void receivedOfflineData();
-void putOfflineData(String url, String values);
-void putMultiOfflineData(String values);
-void getOfflineData(bool log);
+void putOfflineData(String url, String data);
+void putMultiOfflineData(String data);
+void getOfflineData();
+void setupOTA();
 
 
 bool strContains(String text, String value) {
-  return text.indexOf(value) != -1;
+  return text.indexOf(value) > -1;
+}
+
+bool strContains(int text, String value) {
+  return String(text).indexOf(value) > -1;
+}
+
+bool RTCisrunning() {
+  return RTC.now().unixtime() > 1546304461;
+  // return RTC.isrunning();
 }
 
 bool hasTimeChanged() {
-  uint32_t currentTime = RTC.isrunning() ? RTC.now().unixtime() : millis() / 1000;
-  if (abs(currentTime - loopTime) >= 1) {
-    loopTime = currentTime;
+  uint32_t current_time = RTCisrunning() ? RTC.now().unixtime() : millis() / 1000;
+  if (abs(current_time - loop_time) >= 1) {
+    loop_time = current_time;
     return true;
   }
   return false;
 }
 
 void note(String text) {
-  if (text == "") {
-    return;
-  }
 
   String logs = strContains(text, "iDom") ? "\n[" : "[";
-  if (RTC.isrunning()) {
+  if (RTCisrunning()) {
     DateTime now = RTC.now();
     logs += now.day();
     logs += ".";
@@ -90,42 +113,49 @@ void note(String text) {
   }
   logs += "] " + text;
 
-  if (keepLog) {
-    File file = SPIFFS.open("/log.txt", "a");
+  Serial.print("\n" + logs);
+
+  if (keep_log) {
+    File file = LittleFS.open("/log.txt", "a");
     if (file) {
       file.println(logs);
       file.close();
     }
   }
-
-  Serial.print("\n" + logs);
 }
 
 bool writeObjectToFile(String name, DynamicJsonDocument object) {
   name = "/" + name + ".txt";
+  bool result = false;
 
-  File file = SPIFFS.open(name, "w");
+  File file = LittleFS.open(name, "w");
   if (file && object.size() > 0) {
-    bool result = serializeJson(object, file) > 2;
+    result = serializeJson(object, file) > 2;
     file.close();
-    return result;
   }
-  return false;
+
+  return result;
 }
 
-String get1Smart(int index) {
+String get1(String text, int index) {
   int found = 0;
-  int strIndex[] = {0, -1};
-  int maxIndex = smartString.length() - 1;
+  int str_index[] = {0, -1};
+  int max_index = text.length() - 1;
 
-  for (int i = 0; i <= maxIndex && found <= index; i++) {
-    if (smartString.charAt(i) == ',' || i == maxIndex) {
+  for (int i = 0; i <= max_index && found <= index; i++) {
+    if (text.charAt(i) == ',' || i == max_index) {
       found++;
-      strIndex[0] = strIndex[1] + 1;
-      strIndex[1] = (i == maxIndex) ? i + 1 : i;
+      str_index[0] = str_index[1] + 1;
+      str_index[1] = (i == max_index) ? i + 1 : i;
     }
   }
-  return found > index ? smartString.substring(strIndex[0], strIndex[1]) : "";
+  return found > index ? text.substring(str_index[0], str_index[1]) : "";
+}
+
+String getSmartString() {
+  String result = smart_string;
+  result.replace("&", "%26");
+  return result;
 }
 
 
@@ -139,6 +169,7 @@ void connectingToWifi() {
   delay(100);
 
   WiFi.begin(ssid.c_str(), password.c_str());
+
   int timeout = 0;
   while (timeout++ < 20 && WiFi.status() != WL_CONNECTED) {
     delay(250);
@@ -150,7 +181,7 @@ void connectingToWifi() {
 
   if (result) {
     logs = "Connected to " + WiFi.SSID();
-    logs += "\n IP address: " + WiFi.localIP().toString();
+    logs += " : " + WiFi.localIP().toString();
   } else {
     logs += " timed out";
   }
@@ -162,6 +193,7 @@ void connectingToWifi() {
     startServices();
     sayHelloToTheServer();
   } else {
+    delay(1000);
     initiatingWPS();
   }
 }
@@ -173,8 +205,8 @@ void initiatingWPS() {
 
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
-  WiFi.begin();
 
+  WiFi.begin();
   WiFi.beginWPSConfig();
 
   int timeout = 0;
@@ -183,14 +215,15 @@ void initiatingWPS() {
     Serial.print(".");
     delay(250);
   }
+
   bool result = WiFi.status() == WL_CONNECTED;
 
   if (result) {
     ssid = WiFi.SSID();
     password = WiFi.psk();
 
-    logs += " finished";
-    logs += "\n Connected to " + WiFi.SSID();
+    logs += " finished. ";
+    logs += "Connected to " + WiFi.SSID();
   } else {
     logs += " timed out";
   }
@@ -201,52 +234,54 @@ void initiatingWPS() {
     startServices();
     sayHelloToTheServer();
   } else {
+    if (hasTimeChanged()) {
+      automaticSettings();
+    }
     if (ssid != "" && password != "") {
       connectingToWifi();
+    } else {
+      initiatingWPS();
     }
   }
 }
 
 
 void activationTheLog() {
-  if (keepLog) {
+  if (keep_log) {
+    server.send(200, "text/html", "Done");
     return;
   }
 
-  File file = SPIFFS.open("/log.txt", "a");
+  File file = LittleFS.open("/log.txt", "a");
   if (file) {
     file.println();
     file.close();
   }
-  keepLog = true;
+  keep_log = true;
 
-  String logs = "The log has been activated";
-  server.send(200, "text/plain", logs);
-  Serial.print("\n" + logs);
+  server.send(200, "text/plain", "The log has been activated");
 }
 
 void deactivationTheLog() {
-  if (!keepLog) {
+  if (!keep_log) {
+    server.send(200, "text/html", "Done");
     return;
   }
 
-  if (SPIFFS.exists("/log.txt")) {
-    SPIFFS.remove("/log.txt");
+  if (LittleFS.exists("/log.txt")) {
+    LittleFS.remove("/log.txt");
   }
-  keepLog = false;
+  keep_log = false;
 
-  String logs = "The log has been deactivated";
-  server.send(200, "text/plain", logs);
-  Serial.print("\n" + logs);
+  server.send(200, "text/plain", "The log has been deactivated");
 }
 
 void requestForLogs() {
-  File file = SPIFFS.open("/log.txt", "r");
+  File file = LittleFS.open("/log.txt", "r");
   if (!file) {
     server.send(404, "text/plain", "No log file");
     return;
   }
-  Serial.print("\nA log file was requested");
 
   server.setContentLength(file.size() + String("Log file\nHTTP/1.1 200 OK").length());
   server.send(200, "text/html", "Log file\n");
@@ -254,37 +289,82 @@ void requestForLogs() {
     server.sendContent(String(char(file.read())));
   }
   file.close();
+
   server.send(200, "text/html", "Done");
 }
 
 void clearTheLog() {
-  if (SPIFFS.exists("/log.txt")) {
-    File file = SPIFFS.open("/log.txt", "w");
-    if (file) {
-      file.println();
-      file.close();
-    }
-
-    String logs = "The log file was cleared";
-    server.send(200, "text/plain", logs);
-    Serial.print("\n" + logs);
-  } else {
+  File file = LittleFS.open("/log.txt", "w");
+  if (!file) {
     server.send(404, "text/plain", "Failed!");
+    return;
+  }
+
+  file.println();
+  file.close();
+
+  server.send(200, "text/plain", "The log file was cleared");
+}
+
+
+void getSunriseSunset(int day) {
+  if (WiFi.status() != WL_CONNECTED || geo_location.length() < 2) {
+    return;
+  }
+
+  String location = "lat=" + geo_location;
+  location.replace("x", "&lng=");
+
+  HTTP.begin("http://api.sunrise-sunset.org/json?" + location);
+  HTTP.addHeader("Content-Type", "text/plain");
+
+  if (HTTP.GET() == HTTP_CODE_OK) {
+    DynamicJsonDocument json_object(1024);
+    deserializeJson(json_object, HTTP.getString());
+    JsonObject object = json_object["results"];
+
+    if (object.containsKey("sunrise") && object.containsKey("sunset")) {
+      String data = object["sunrise"].as<String>();
+      next_sunrise = ((data.substring(0, data.indexOf(":")).toInt() + (strContains(data, "PM") ? 12 : 0) + (offset > 0 ? offset / 3600 : 0) + (dst ? 1 : 0)) * 60) + data.substring(data.indexOf(":") + 1, data.indexOf(":") + 3).toInt();
+      next_sunrise += dawn_delay;
+
+      data = object["sunset"].as<String>();
+      next_sunset = ((data.substring(0, data.indexOf(":")).toInt() + (strContains(data, "PM") ? 12 : 0) + (offset > 0 ? offset / 3600 : 0) + (dst ? 1 : 0)) * 60) + data.substring(data.indexOf(":") + 1, data.indexOf(":") + 3).toInt();
+      next_sunset += dusk_delay;
+
+      last_sun_check = day;
+      note("Sunset: " + String(next_sunset) + " / Sunrise: " + String(next_sunrise));
+    }
+  }
+
+  HTTP.end();
+}
+
+int findMDNSDevices() {
+  int n = MDNS.queryService("idom", "tcp");
+  String ip;
+
+  if (n > 0) {
+    for (int i = 0; i < n; ++i) {
+      ip = String(MDNS.IP(i)[0]) + '.' + String(MDNS.IP(i)[1]) + '.' + String(MDNS.IP(i)[2]) + '.' + String(MDNS.IP(i)[3]);
+      if (!strContains(devices, ip)) {
+        devices += (devices.length() > 0 ? "," : "" ) + ip;
+      }
+    }
+  }
+
+  if (devices.length() > 0) {
+    int count = 1;
+    for (byte b: devices) {
+      if (b == ',') {
+        count++;
+      }
+    }
+    return count;
+  } else {
+    return 0;
   }
 }
-
-void deleteWiFiSettings() {
-  ssid = "";
-  password = "";
-  saveSettings();
-
-  String logs = "Wi-Fi settings have been removed";
-  server.send(200, "text/plain", logs);
-  Serial.print("\n" + logs);
-}
-
-
-
 
 void receivedOfflineData() {
   if (server.hasArg("plain")) {
@@ -296,89 +376,118 @@ void receivedOfflineData() {
   server.send(200, "text/plain", "Body not received");
 }
 
-void putOfflineData(String url, String values) {
+void putOfflineData(String url, String data) {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
 
   String logs;
 
-  HTTP.begin("http://" + url + "/set");
-  HTTP.addHeader("Content-Type", "text/plain");
-  int httpCode = HTTP.PUT(values);
-  if (httpCode > 0) {
-    logs = "Data transfer: http://" + url + "/set" + values;
+  HTTP.begin(WIFI, "http://" + url + "/set");
+  int http_code = HTTP.PUT(data);
+
+  if (http_code == HTTP_CODE_OK) {
+    logs = url + ": " + data;
   } else {
-    logs = "Error sending data to " + url;
+    logs = url + " - error "  + http_code;
   }
+
   HTTP.end();
 
-  note(logs);
+  note("Data transfer to:\n" + logs);
 }
 
-void putMultiOfflineData(String values) {
+void putMultiOfflineData(String data) {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
 
-  int n = MDNS.queryService("idom", "tcp");
-  if (n > 0) {
-    String ip;
-    String logs;
-    String devices;
+  int count = findMDNSDevices();
+  if (count == 0) {
+    return;
+  }
 
-    for (int i = 0; i < n; ++i) {
-      ip = String(MDNS.IP(i)[0]) + '.' + String(MDNS.IP(i)[1]) + '.' + String(MDNS.IP(i)[2]) + '.' + String(MDNS.IP(i)[3]);
+  String ip;
+  int http_code;
+  String logs = "";
 
-      if (!strContains(devices, ip)) {
-        devices += ip + ",";
+  for (int i = 0; i < count; i++) {
+    ip = get1(devices, i);
 
-        HTTP.begin("http://" + ip + "/set");
-        HTTP.addHeader("Content-Type", "text/plain");
-        int httpCode = HTTP.PUT(values);
-        if (httpCode > 0) {
-          logs += "\n http://" + ip + "/set" + values;
-        } else {
-          logs += "\n Error sending data to " + ip;
-        }
-        HTTP.end();
-      }
+    HTTP.begin(WIFI, "http://" + ip + "/set");
+    http_code = HTTP.PUT(data);
+
+    if (http_code == HTTP_CODE_OK) {
+      logs += "\n " + ip + ": " + data;
+    } else {
+      logs += "\n " + ip + " - error "  + http_code;
     }
 
-    note("Data transfer between devices (" + String(n) + "): " + logs + "");
+    HTTP.end();
   }
+
+  note("Data transfer to " + String(count) + ":" + logs);
 }
 
-void getOfflineData(bool log) {
+void getOfflineData() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
 
-  int n = MDNS.queryService("idom", "tcp");
-  if (n > 0) {
-    String ip;
-    String logs = "Received data...";
+  int count = findMDNSDevices();
+  if (count == 0) {
+    return;
+  }
 
-    for (int i = 0; i < n; ++i) {
-      ip = String(MDNS.IP(i)[0]) + '.' + String(MDNS.IP(i)[1]) + '.' + String(MDNS.IP(i)[2]) + '.' + String(MDNS.IP(i)[3]);
+  String ip;
+  int http_code;
+  String data;
+  String logs = "";
 
-      HTTP.begin("http://" + ip + "/basicdata");
-      HTTP.addHeader("Content-Type", "text/plain");
-      int httpCode = HTTP.GET();
+  for (int i = 0; i < count; i++) {
+    ip = get1(devices, i);
 
-      if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
-        String data = HTTP.getString();
+    HTTP.begin(WIFI, "http://" + ip + "/basicdata");
+    http_code = HTTP.POST("{\"id\":\"" + String(WiFi.macAddress()) + "\"}");
+
+    if (http_code == HTTP_CODE_OK) {
+      if (HTTP.getSize() > 15) {
+        data = HTTP.getString();
         logs +=  "\n " + ip + ": " + data;
         readData(data, true);
-      } else {
-        logs += "\n " + ip + " - failed! " + httpCode;
       }
-
-      HTTP.end();
+    } else {
+      logs += "\n " + ip + ": error " + http_code;
     }
 
-    if (log) {
-      note(logs);
-    }
+    HTTP.end();
   }
+
+  note("Received data..." + logs);
+}
+
+void setupOTA() {
+  ArduinoOTA.setHostname(host_name);
+
+  ArduinoOTA.onEnd([]() {
+    note("Software update over Wi-Fi");
+  });
+
+  ArduinoOTA.onError([](ota_error_t error) {
+    String log = "OTA ";
+    if (error == OTA_AUTH_ERROR) {
+      log += "Auth";
+    } else if (error == OTA_BEGIN_ERROR) {
+      log += "Begin";
+    } else if (error == OTA_CONNECT_ERROR) {
+      log += "Connect";
+    } else if (error == OTA_RECEIVE_ERROR) {
+      log += "Receive";
+    } else if (error == OTA_END_ERROR) {
+      log += "End";
+    }
+    note(log + String(" failed!"));
+  });
+
+  ArduinoOTA.begin();
 }

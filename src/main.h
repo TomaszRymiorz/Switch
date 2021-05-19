@@ -1,44 +1,57 @@
 #include <Arduino.h>
-#include <SparkFun_APDS9960.h>
+#include <avdweb_Switch.h>
 
 const char device[7] = "switch";
+const char smart_prefix = 'l';
+const int version = 13;
 
-const int apds9960_pin = D3;
-const int light_pin[] = {D0, D6, D7};
+const int led_pin = 16;
+const int relay_pin[] = {13, 4};
 
-SparkFun_APDS9960 apds = SparkFun_APDS9960();
-volatile bool isr_flag = 0;
-bool adps_init;
+Switch button1 = Switch(12);
+Switch button2 = Switch(14);
+
+bool restore_on_power_loss = false;
 
 struct Smart {
+  bool enabled;
   String lights;
   String days;
-  bool onAtNight;
-  bool offAtDay;
-  int onTime;
-  int offTime;
-  bool enabled;
+  bool on_at_night;
+  bool off_at_day;
+  int on_time;
+  int off_time;
+  bool on_at_night_and_time;
+  bool off_at_day_and_time;
+  bool react_to_cloudiness;
   uint32_t access;
 };
 
-bool first_light = false;
-bool second_light = false;
-bool third_light = false;
+bool light1 = false;
+bool light2 = false;
 
-void interruptRoutine();
-void initApds();
-void setLightsPins();
-String statesOfLights();
+int twilight_counter = 0;
+
+bool twilight = false;
+bool cloudiness = false;
+
 bool readSettings(bool backup);
 void saveSettings();
+void saveSettings(bool log);
 void sayHelloToTheServer();
 void introductionToServer();
 void startServices();
+String getSwitchDetail();
+String getValue();
 void handshake();
 void requestForState();
-void requestForBasicData();
-void readData(String payload, bool perWiFi);
+void exchangeOfBasicData();
+void button1Single(void* s);
+void button2Single(void* s);
+bool hasTheLightChanged();
+void readData(String payload, bool per_wifi);
 void setSmart();
-bool automaticSettings(bool lightChanged);
+bool automaticSettings();
+bool automaticSettings(bool light_changed);
 void handleGesture();
-void setLights(String gesture);
+void setLights(String orderer, bool put_online);

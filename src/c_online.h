@@ -1,26 +1,35 @@
 #include "core.h"
 
-const String baseURL = "";
+const String base_url = "";
 
-String networkedDevices;
-bool prime;
-
-uint32_t updateTime = 0;
-bool sendingError = false;
-bool blockGetOnlineData = false;
+uint32_t update_time = 0;
+bool sending_error = false;
+bool block_put_online_data = false;
+bool block_get_online_data = false;
 
 //This functions is only available with a ready-made iDom device.
 
 void activationOnlineMode();
 void deactivationOnlineMode();
-void putOnlineData(String variant, String values);
-void putOnlineData(String variant, String values, bool logs);
+void manualUpdate();
+void checkForUpdate();
+void getTime();
+void putOnlineData(String data);
+void putOnlineData(String variant, String data);
+void putOnlineData(String data, bool logs, bool flawless);
+void putOnlineData(String variant, String data, bool logs, bool flawless);
 void getOnlineData();
-void readMultiOnlineData(String payload);
+void readOnlineData(String payload);
+
 
 void activationOnlineMode() {}
 void deactivationOnlineMode() {}
-void putOnlineData(String variant, String values) {}
-void putOnlineData(String variant, String values, bool logs) {}
+void manualUpdate() {}
+void checkForUpdate() {}
+void getTime() {}
+void putOnlineData(String data) {}
+void putOnlineData(String variant, String data) {}
+void putOnlineData(String data, bool logs, bool flawless) {}
+void putOnlineData(String variant, String data, bool logs, bool flawless) {}
 void getOnlineData() {}
-void readMultiOnlineData(String payload) {}
+void readOnlineData(String payload) {}
