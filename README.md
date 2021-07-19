@@ -22,6 +22,10 @@ Ustawienia automatyczne obejmują włączanie i wyłączanie światła o wybrane
 * '_' włącz o godzinie - jeśli znak występuje w zapisie, przed nim znajduje się godzina w zapisie czasu uniksowego
 * '-' wyłącz o godzinie - jeśli występuje w zapisie, po nim znajduje się godzina w zapisie czasu uniksowego
 * '/' wyłącz ustawienie - obecność znaku wskazuje, że ustawienie będzie ignorowane
+* 'l&' wszystkie wyzwalacze muszą zostać spełnione by wykonać czynność
+* cyfra bezpośrednio przed 'l', ale nie przed "_" wskazuje na stan włącznika
+
+Obecność znaku 'l' wskazuje, że ustawienie dotyczy włącznika.
 
 Przykład zapisu trzech ustawień automatycznych: 1140_12w-420,4asn,/1ouehrn-300
 
