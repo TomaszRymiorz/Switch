@@ -3,7 +3,7 @@
 
 const char device[7] = "switch";
 const char smart_prefix = 'l';
-const int version = 15;
+const int version = 16;
 
 const int led_pin = 16;
 const int relay_pin[] = {13, 4};
@@ -37,6 +37,11 @@ int twilight_counter = 0;
 bool twilight = false;
 bool cloudiness = false;
 
+String twin = "";
+int double_button_function = 0;
+int long_button_function = 0;
+bool inverted_button = false;
+
 bool readSettings(bool backup);
 void saveSettings();
 void saveSettings(bool log);
@@ -48,8 +53,10 @@ String getValue();
 void handshake();
 void requestForState();
 void exchangeOfBasicData();
-void button1Pushed(void* s);
-void button2Pushed(void* s);
+void buttonSingle(void* b);
+void buttonBypass(int button);
+void buttonDouble(void* b);
+void buttonLong(void* b);
 bool hasTheLightChanged();
 void readData(String payload, bool per_wifi);
 void setSmart();
