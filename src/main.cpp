@@ -342,7 +342,7 @@ void buttonDouble(void* b) {
     putOfflineData(twin, "{\"val\":\"" + String((button == 1 && !inverted_button) || (button == 2 && inverted_button) ? "100.100.100" : "0.0.0") + "\",\"blinds\":1}");
   }
   if (double_button_function == 4) {
-    putMultiOfflineData("{\"val\":\"" + String((button == 1 && !inverted_button) || (button == 2 && inverted_button) ? "100.100.100" : "0.0.0") + "\"},\"blinds\":1");
+    putMultiOfflineData("{\"val\":\"" + String((button == 1 && !inverted_button) || (button == 2 && inverted_button) ? "100.100.100" : "0.0.0") + "\",\"blinds\":1}");
   }
 }
 
