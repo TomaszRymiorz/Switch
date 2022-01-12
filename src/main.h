@@ -3,7 +3,7 @@
 
 const char device[7] = "switch";
 const char smart_prefix = 'l';
-const int version = 18;
+const int version = 19;
 
 const int led_pin = 16;
 const int relay_pin[] = {13, 4};
