@@ -46,11 +46,40 @@ void setup() {
   button2.setLongPressCallback(&buttonLong, (void*)"2");
 
   setupOTA();
+  connectingToWifi(false);
+}
 
-  if (ssid != "" && password != "") {
-    connectingToWifi(false);
+void loop() {
+  if (WiFi.status() == WL_CONNECTED) {
+    digitalWrite(led_pin, LOW);
+
+    ArduinoOTA.handle();
+    server.handleClient();
+    MDNS.update();
   } else {
-    initiatingWPS();
+    digitalWrite(led_pin, loop_time % 2 == 0);
+    if (!auto_reconnect) {
+      connectingToWifi(true);
+    } else {
+      if (!sending_error) {
+        sending_error = true;
+        note("Wi-Fi connection lost");
+      }
+    }
+  }
+
+  button1.poll();
+  button2.poll();
+
+  if (hasTimeChanged()) {
+    getOnlineData();
+    if (light_delay > 0) {
+      if (--light_delay == 0) {
+        automaticSettings(true);
+        return;
+      }
+    }
+    automaticSettings();
   }
 }
 
@@ -104,8 +133,8 @@ bool readSettings(bool backup) {
   if (json_object.containsKey("twilight")) {
     twilight = json_object["twilight"].as<bool>();
   }
-  if (json_object.containsKey("cloudiness")) {
-    cloudiness = json_object["cloudiness"].as<bool>();
+  if (json_object.containsKey("twilight_sensor")) {
+    twilight_sensor = json_object["twilight_sensor"].as<bool>();
   }
 
   if (restore_on_power_loss) {
@@ -122,9 +151,9 @@ bool readSettings(bool backup) {
   }
   if (json_object.containsKey("location")) {
     geo_location = json_object["location"].as<String>();
-  }
-  if (json_object.containsKey("sensors")) {
-    also_sensors = json_object["sensors"].as<bool>();
+    if (geo_location.length() > 2) {
+      sun.setPosition(geo_location.substring(0, geo_location.indexOf("x")).toDouble(), geo_location.substring(geo_location.indexOf("x") + 1).toDouble(), 0);
+    }
   }
   if (json_object.containsKey("dawn_delay")) {
     dawn_delay = json_object["dawn_delay"].as<int>();
@@ -180,17 +209,14 @@ void saveSettings(bool log) {
   if (twilight) {
     json_object["twilight"] = twilight;
   }
-  if (cloudiness) {
-    json_object["cloudiness"] = cloudiness;
+  if (twilight_sensor) {
+    json_object["twilight_sensor"] = twilight_sensor;
   }
   if (fixit > 0) {
     json_object["fixit"] = fixit;
   }
-  if (geo_location.length() > 2) {
+  if (!geo_location.equals(default_location)) {
     json_object["location"] = geo_location;
-  }
-  if (also_sensors) {
-    json_object["sensors"] = also_sensors;
   }
   if (dusk_delay != 0) {
     json_object["dusk_delay"] = dusk_delay;
@@ -230,6 +256,19 @@ void saveSettings(bool log) {
   }
 }
 
+String getSwitchDetail() {
+  return "";
+    // This function is only available with a ready-made iDom device.
+}
+
+String getValue() {
+  if (!light1 && !light2) {
+    return "0";
+  }
+
+  return String(light1 ? "1" : "") + (light2 ? "2" : "");
+}
+
 
 void sayHelloToTheServer() {
   // This function is only available with a ready-made iDom device.
@@ -255,21 +294,10 @@ void startServices() {
 
   MDNS.addService("idom", "tcp", 8080);
 
-  getTime();
+  ntpClient.begin();
+  ntpClient.update();
+  readData("{\"time\":" + String(ntpClient.getEpochTime()) + "}", false);
   getOfflineData();
-}
-
-String getSwitchDetail() {
-  return "";
-    // This function is only available with a ready-made iDom device.
-}
-
-String getValue() {
-  if (!light1 && !light2) {
-    return "0";
-  }
-
-  return String(light1 ? "1" : "") + (light2 ? "2" : "");
 }
 
 void handshake() {
@@ -280,7 +308,7 @@ void handshake() {
   String reply = "\"id\":\"" + WiFi.macAddress()
   + "\",\"value\":" + getValue()
   + ",\"twilight\":" + twilight
-  + ",\"cloudiness\":" + cloudiness
+  + ",\"twilight_sensor\":" + twilight_sensor
   + ",\"next_sunset\":" + next_sunset
   + ",\"next_sunrise\":" + next_sunrise
   + ",\"sun_check\":" + last_sun_check
@@ -290,8 +318,7 @@ void handshake() {
   + ",\"fixit\":" + fixit
   + ",\"last_accessed_log\":" + last_accessed_log
   + ",\"location\":\"" + geo_location
-  + "\",\"sensors\":" + also_sensors
-  + ",\"version\":" + version + "." + core_version
+  + "\",\"version\":" + version + "." + core_version
   + ",\"smart\":\"" + smart_string
   + "\",\"twin\":\"" + twin
   + "\",\"single_button\":\"" + single_button_function
@@ -301,7 +328,7 @@ void handshake() {
   + ",\"dst\":" + dst
   + ",\"offset\":" + offset
   + ",\"time\":" + (RTCisrunning() ? String(rtc.now().unixtime() - offset - (dst ? 3600 : 0)) : "0")
-  + ",\"active\":" + (RTCisrunning() ? String((rtc.now().unixtime() - offset - (dst ? 3600 : 0)) - start_time) : "0")
+  + ",\"active\":" + String(RTCisrunning() ? (rtc.now().unixtime() - offset - (dst ? 3600 : 0) - start_time) : (millis() / 1000))
   + ",\"uprisings\":" + uprisings
   + ",\"offline\":" + offline;
 
@@ -375,45 +402,6 @@ void buttonFunction(String function) {
   }
 }
 
-void loop() {
-  if (WiFi.status() == WL_CONNECTED) {
-    digitalWrite(led_pin, LOW);
-
-    ArduinoOTA.handle();
-    server.handleClient();
-    MDNS.update();
-  } else {
-    digitalWrite(led_pin, loop_time % 2 == 0);
-    if (ssid != "" && password != "") {
-      connectingToWifi(false);
-    } else {
-      if (!sending_error) {
-        sending_error = true;
-        note("Wi-Fi connection lost");
-      }
-    }
-  }
-
-  button1.poll();
-  button2.poll();
-
-  if (hasTimeChanged()) {
-    getOnlineData();
-    if (light_delay > 0) {
-      if (--light_delay == 0) {
-        automaticSettings(true);
-        return;
-      }
-    }
-    automaticSettings();
-  }
-}
-
-
-bool hasTheLightChanged() {
-  return false;
-}
-
 void readData(String payload, bool per_wifi) {
   DynamicJsonDocument json_object(1024);
   deserializeJson(json_object, payload);
@@ -464,7 +452,7 @@ void readData(String payload, bool per_wifi) {
       } else {
         rtc.adjust(DateTime(new_time));
         note("RTC begin");
-        start_time = rtc.now().unixtime() - offset - (dst ? 3600 : 0);
+        start_time = (millis() / 1000) + rtc.now().unixtime() - offset - (dst ? 3600 : 0);
         if (RTCisrunning()) {
           details_change = true;
         }
@@ -526,44 +514,23 @@ void readData(String payload, bool per_wifi) {
   if (json_object.containsKey("location")) {
     if (geo_location != json_object["location"].as<String>()) {
       geo_location = json_object["location"].as<String>();
-      getSunriseSunset(rtc.now().day());
-      details_change = true;
-    }
-  }
-
-  if (json_object.containsKey("sensors")) {
-    if (also_sensors != strContains(json_object["sensors"].as<String>(), "1")) {
-      also_sensors = !also_sensors;
+      if (geo_location.length() > 2) {
+        sun.setPosition(geo_location.substring(0, geo_location.indexOf("x")).toDouble(), geo_location.substring(geo_location.indexOf("x") + 1).toDouble(), 0);
+      }
+      getSunriseSunset(rtc.now());
       details_change = true;
     }
   }
 
   if (json_object.containsKey("light")) {
-    if (((geo_location.length() < 2 || also_sensors) && twilight != strContains(json_object["light"].as<String>(), "t"))
-    || (geo_location.length() > 2 && !also_sensors && cloudiness != strContains(json_object["light"].as<String>(), "t"))) {
-      bool light_changed = false;
-      if (geo_location.length() < 2) {
-        twilight = !twilight;
-        light_changed = true;
-      } else {
-        if (also_sensors) {
-          twilight = !twilight;
-          light_changed = true;
-        } else {
-          if (!twilight) {
-            cloudiness = !cloudiness;
-            light_changed = true;
-          }
-        }
-      }
+    if (twilight_sensor != strContains(json_object["light"].as<String>(), "t")) {
+      twilight_sensor = !twilight_sensor;
       settings_change = true;
 
-      if (light_changed) {
-        if ((geo_location.length() < 2 || also_sensors) && (twilight ? dusk_delay != 0 : dawn_delay != 0)) {
-          light_delay = ((twilight ? dusk_delay : dawn_delay) * ((twilight ? dusk_delay : dawn_delay) < 0 ? -1 : 1)) * 60;
-        } else {
-          automaticSettings(true);
-        }
+      if (twilight_sensor ? dusk_delay > 0 : dawn_delay > 0) {
+        light_delay = (twilight_sensor ? dusk_delay : dawn_delay) * 60;
+      } else {
+        automaticSettings(true);
       }
     }
   }
@@ -608,6 +575,245 @@ void readData(String payload, bool per_wifi) {
   }
 }
 
+bool hasTheLightChanged() {
+  return false;
+}
+
+bool automaticSettings() {
+  return automaticSettings(hasTheLightChanged());
+}
+
+bool automaticSettings(bool light_changed) {
+  DateTime now = rtc.now();
+  int current_time = -1;
+
+  if (RTCisrunning()) {
+    current_time = (now.hour() * 60) + now.minute();
+
+    if (geo_location.length() > 2) {
+      if (now.second() == 0 && ((current_time > 181 && last_sun_check != now.day()) || next_sunset == -1 || next_sunrise == -1)) {
+        getSunriseSunset(now);
+      }
+
+      if (next_sunset > -1 && next_sunrise > -1) {
+        if ((current_time == (next_sunset + dusk_delay)) || (current_time == (next_sunrise + dawn_delay))) {
+          if (twilight && current_time == (next_sunrise + dawn_delay)) {
+            twilight = false;
+            saveSettings();
+          }
+          if (!twilight && current_time == (next_sunset + dusk_delay)) {
+            twilight = true;
+            saveSettings();
+          }
+        }
+      }
+    }
+
+    if (current_time == 120 || current_time == 180) {
+      if (now.month() == 3 && now.day() > 24 && days_of_the_week[now.dayOfTheWeek()][0] == 's' && current_time == 120 && !dst) {
+        int new_time = now.unixtime() + 3600;
+        rtc.adjust(DateTime(new_time));
+        dst = true;
+        note("Smart set to summer time");
+        saveSettings();
+        getSunriseSunset(now);
+      }
+      if (now.month() == 10 && now.day() > 24 && days_of_the_week[now.dayOfTheWeek()][0] == 's' && current_time == 180 && dst) {
+        int new_time = now.unixtime() - 3600;
+        rtc.adjust(DateTime(new_time));
+        dst = false;
+        note("Smart set to winter time");
+        saveSettings();
+        getSunriseSunset(now);
+      }
+    }
+
+    if (current_time == 60 && now.second() == 0) {
+      ntpClient.update();
+      readData("{\"time\":" + String(ntpClient.getEpochTime()) + "}", false);
+
+      if (last_accessed_log++ > 14) {
+        deactivationTheLog();
+      }
+    }
+
+    if (current_time == (WiFi.localIP()[3] / 2) && now.second() == 0) {
+      checkForUpdate(false);
+    }
+  }
+
+  int i = -1;
+  String old_state = getValue();
+  bool result = false;
+  bool local_result;
+  bool at_time_result;
+  bool end_time_result;
+  bool at_sunset_result;
+  bool at_sunrise_result;
+  bool at_dusk_result;
+  bool at_dawn_result;
+  int destination;
+  String log = "";
+  while (++i < smart_count) {
+    local_result = false;
+    at_time_result = false;
+    end_time_result = false;
+    at_sunset_result = false;
+    at_sunrise_result = false;
+    at_dusk_result = false;
+    at_dawn_result = false;
+    destination = -1;
+    if (smart_array[i].enabled && (strContains(smart_array[i].days, "w") || (RTCisrunning() && strContains(smart_array[i].days, days_of_the_week[now.dayOfTheWeek()])))) {
+      if (current_time > -1) {
+        if (smart_array[i].at_time > -1) {
+          at_time_result = smart_array[i].at_time == current_time && smart_array[i].access + 60 < now.unixtime();
+          local_result |= at_time_result;
+          if (!at_time_result && smart_array[i].any_required) {
+            at_time_result = smart_array[i].at_time < current_time;
+          }
+        }
+        if (smart_array[i].end_time > -1) {
+          end_time_result = smart_array[i].end_time == current_time && smart_array[i].access + 60 < now.unixtime();
+          local_result |= end_time_result;
+          if (!end_time_result && smart_array[i].any_required) {
+            end_time_result = smart_array[i].end_time < current_time;
+          }
+        }
+        if (smart_array[i].at_sunset) {
+          at_sunset_result = next_sunset > -1 && (next_sunset + dusk_delay) == current_time && twilight && smart_array[i].access + 60 < now.unixtime();
+          local_result |= at_sunset_result;
+          if (!at_sunset_result && smart_array[i].any_required) {
+            at_sunset_result = next_sunset > -1 && (next_sunset + dusk_delay) < current_time && twilight;
+          }
+        }
+        if (smart_array[i].at_sunrise) {
+          at_sunrise_result = next_sunrise > -1 && (next_sunrise + dawn_delay) == current_time && !twilight && smart_array[i].access + 60 < now.unixtime();
+          local_result |= at_sunrise_result;
+          if (!at_sunrise_result && smart_array[i].any_required) {
+            at_sunrise_result = next_sunrise > -1 && (next_sunrise + dawn_delay) < current_time && !twilight;
+          }
+        }
+      }
+      if (smart_array[i].at_dusk) {
+        at_dusk_result = light_changed && twilight_sensor;
+        local_result |= at_dusk_result;
+        if (!at_dusk_result && smart_array[i].any_required) {
+          at_dusk_result = twilight_sensor;
+        }
+      }
+      if (smart_array[i].at_dawn) {
+        at_dawn_result = light_changed && !twilight_sensor && !twilight;
+        local_result |= at_dawn_result;
+        if (!at_dawn_result && smart_array[i].any_required) {
+          at_dawn_result = !twilight_sensor && !twilight;
+        }
+      }
+      if (strContains(smart_array[i].must_be_on, "1") || strContains(smart_array[i].must_be_on, "2")) {
+        if (strContains(smart_array[i].must_be_on, "1")) {
+          local_result &= light1;
+        }
+        if (strContains(smart_array[i].must_be_on, "2")) {
+          local_result &= light2;
+        }
+      }
+      if (strContains(smart_array[i].must_be_off, "1") || strContains(smart_array[i].must_be_off, "2")) {
+        if (strContains(smart_array[i].must_be_off, "1")) {
+          local_result &= !light1;
+        }
+        if (strContains(smart_array[i].must_be_off, "2")) {
+          local_result &= !light2;
+        }
+      }
+
+      if (local_result) {
+        if (!smart_array[i].any_required
+        || ((smart_array[i].at_time == -1 || (smart_array[i].at_time > -1 && at_time_result)) && (smart_array[i].end_time == -1 || (smart_array[i].end_time > -1 && end_time_result))
+        && (!smart_array[i].at_sunset || (smart_array[i].at_sunset && at_sunset_result)) && (!smart_array[i].at_sunrise || (smart_array[i].at_sunrise && at_sunrise_result))
+        && (!smart_array[i].at_dusk || (smart_array[i].at_dusk && at_dusk_result)) && (!smart_array[i].at_dawn || (smart_array[i].at_dawn && at_dawn_result)))) {
+          if (at_time_result) {
+            destination = smart_array[i].action > -1 ? smart_array[i].action : 1;
+            log = "time";
+          }
+          if (end_time_result) {
+            destination = smart_array[i].action > -1 ? smart_array[i].action : 0;
+            log = "time";
+          }
+          if (at_sunset_result) {
+            destination = smart_array[i].action > -1 ? smart_array[i].action : 1;
+            if (log.length() > 2) {
+              log += " and ";
+            }
+            log += "sunset";
+            if (dusk_delay != 0) {
+              log += String(dusk_delay);
+            }
+          }
+          if (at_sunrise_result) {
+            destination = smart_array[i].action > -1 ? smart_array[i].action : 0;
+            if (log.length() > 2) {
+              log += " and ";
+            }
+            log += "sunrise";
+            if (dawn_delay != 0) {
+              log += String(dawn_delay);
+            }
+          }
+          if (at_dusk_result) {
+            destination = smart_array[i].action > -1 ? smart_array[i].action : 1;
+            if (log.length() > 2) {
+              log += " and ";
+            }
+            log += "dusk";
+            if (dusk_delay > 0) {
+              log += String(dusk_delay);
+            }
+          }
+          if (at_dawn_result) {
+            destination = smart_array[i].action > -1 ? smart_array[i].action : 0;
+            if (log.length() > 2) {
+              log += " and ";
+            }
+            log += "dawn";
+            if (dawn_delay > 0) {
+              log += String(dawn_delay);
+            }
+          }
+          if (strContains(smart_array[i].must_be_on, "1") || strContains(smart_array[i].must_be_on, "2")) {
+            if (log.length() > 2) {
+              log += " and ";
+            }
+            log += smart_array[i].must_be_on + " is on";
+          }
+          if (strContains(smart_array[i].must_be_off, "1") || strContains(smart_array[i].must_be_off, "2")) {
+            if (log.length() > 2) {
+              log += " and ";
+            }
+            log += smart_array[i].must_be_off + " is off";
+          }
+        }
+        if (destination > -1) {
+          if (strContains(smart_array[i].light, "1")) {
+            light1 = destination == 1;
+          }
+          if (strContains(smart_array[i].light, "2")) {
+            light2 = destination == 1;
+          }
+          result |= true;
+          smart_array[i].access = now.unixtime();
+          log = (smart_array[i].action > -1 ? String(destination) : destination == 1 ? "On" : "Off") + (smart_array[i].any_required ? " after " : " at ") + log;
+        }
+      }
+    }
+  }
+
+  if (result && old_state != getValue()) {
+    note(log);
+    setLights("smart", true);
+  }
+
+  return result;
+}
+
 void setSmart() {
   if (smart_string.length() < 2) {
     smart_count = 0;
@@ -645,35 +851,41 @@ void setSmart() {
       }
 
       if (strContains(single_smart_string, "_")) {
-        smart_array[smart_count].time = single_smart_string.substring(0, single_smart_string.indexOf("_")).toInt();
+        smart_array[smart_count].at_time = single_smart_string.substring(0, single_smart_string.indexOf("_")).toInt();
         single_smart_string = single_smart_string.substring(single_smart_string.indexOf("_") + 1);
       } else {
-        smart_array[smart_count].time = -1;
+        smart_array[smart_count].at_time = -1;
       }
 
       if (strContains(single_smart_string, "-")) {
-        smart_array[smart_count].off_time = single_smart_string.substring(single_smart_string.indexOf("-") + 1).toInt();
+        smart_array[smart_count].end_time = single_smart_string.substring(single_smart_string.indexOf("-") + 1).toInt();
         single_smart_string = single_smart_string.substring(0, single_smart_string.indexOf("-"));
       } else {
-        smart_array[smart_count].off_time = -1;
+        smart_array[smart_count].end_time = -1;
       }
 
       if (isStringDigit(single_smart_string.substring(0, single_smart_string.indexOf(String(smart_prefix))))) {
-        smart_array[smart_count].target = single_smart_string.substring(0, single_smart_string.indexOf(String(smart_prefix))).toInt();
+        smart_array[smart_count].action = single_smart_string.substring(0, single_smart_string.indexOf(String(smart_prefix))).toInt();
         single_smart_string = single_smart_string.substring(single_smart_string.indexOf(String(smart_prefix)));
       } else {
-        smart_array[smart_count].target = -1;
+        smart_array[smart_count].action = -1;
       }
 
       if (strContains(single_smart_string, "4")) {
-        smart_array[smart_count].lights = "12";
+        smart_array[smart_count].light = "12";
       } else {
-        smart_array[smart_count].lights = strContains(single_smart_string, "1") ? "1" : "";
-        smart_array[smart_count].lights += strContains(single_smart_string, "2") ? "2" : "";
-        if (smart_array[smart_count].lights == "") {
-          smart_array[smart_count].lights = "12";
+        smart_array[smart_count].light = strContains(single_smart_string, "1") ? "1" : "";
+        smart_array[smart_count].light += strContains(single_smart_string, "2") ? "2" : "";
+        if (smart_array[smart_count].light == "") {
+          smart_array[smart_count].light = "12";
         }
       }
+
+      smart_array[smart_count].must_be_on = strContains(single_smart_string, "6") ? "1" : "";
+      smart_array[smart_count].must_be_on += strContains(single_smart_string, "7") ? "2" : "";
+
+      smart_array[smart_count].must_be_off = strContains(single_smart_string, "8") ? "1" : "";
+      smart_array[smart_count].must_be_off += strContains(single_smart_string, "9") ? "2" : "";
 
       if (strContains(single_smart_string, "w")) {
         smart_array[smart_count].days = "w";
@@ -687,191 +899,18 @@ void setSmart() {
         smart_array[smart_count].days += strContains(single_smart_string, "s") ? "s" : "";
       }
 
-      smart_array[smart_count].at_night = strContains(single_smart_string, "n");
-      smart_array[smart_count].at_night_and_time = smart_array[smart_count].time > -1 && (strContains(single_smart_string, String(smart_prefix) + "&") || strContains(single_smart_string, "n&"));
-      smart_array[smart_count].at_day = strContains(single_smart_string, "d");
-      smart_array[smart_count].at_day_and_time = smart_array[smart_count].off_time > -1 && (strContains(single_smart_string, String(smart_prefix) + "&") || strContains(single_smart_string, "d&"));
-      smart_array[smart_count].react_to_cloudiness = strContains(single_smart_string, "z");
-      if (smart_array[smart_count].react_to_cloudiness && !smart_array[smart_count].at_night && !smart_array[smart_count].at_day) {
-        smart_array[smart_count].at_night = true;
-        smart_array[smart_count].at_day = true;
-      }
+      smart_array[smart_count].at_sunset = strContains(single_smart_string, "n");
+      smart_array[smart_count].at_sunrise = strContains(single_smart_string, "d");
+      smart_array[smart_count].at_dusk = strContains(single_smart_string, "<") || strContains(single_smart_string, "z");
+      smart_array[smart_count].at_dawn = strContains(single_smart_string, ">") || strContains(single_smart_string, "z");
+      smart_array[smart_count].any_required = strContains(single_smart_string, "&");
+
       smart_array[smart_count].access = 0;
 
       smart_count++;
     }
   }
   note("Smart contains " + String(smart_count) + " of " + String(smart_prefix));
-}
-
-bool automaticSettings() {
-  return automaticSettings(hasTheLightChanged());
-}
-
-bool automaticSettings(bool light_changed) {
-  bool result = false;
-  DateTime now = rtc.now();
-  String log = "Smart ";
-  int current_time = -1;
-
-  if (RTCisrunning()) {
-    current_time = (now.hour() * 60) + now.minute();
-
-    if (geo_location.length() > 2) {
-      if ((current_time > 61 && last_sun_check != now.day()) || next_sunset == -1 || next_sunrise == -1) {
-        getSunriseSunset(now.day());
-      }
-
-      if (next_sunset > -1 && next_sunrise > -1) {
-        if ((current_time == (next_sunset + dusk_delay)) || (current_time == (next_sunrise + dawn_delay))) {
-          cloudiness = false;
-          if (twilight && current_time == (next_sunrise + dawn_delay)) {
-            twilight = false;
-            saveSettings();
-          }
-          if (!twilight && current_time == (next_sunset + dusk_delay)) {
-            twilight = true;
-            saveSettings();
-          }
-          light_changed = false;
-        }
-      }
-    }
-
-    if (current_time == 120 || current_time == 180) {
-      if (now.month() == 3 && now.day() > 24 && days_of_the_week[now.dayOfTheWeek()][0] == 's' && current_time == 120 && !dst) {
-        int new_time = now.unixtime() + 3600;
-        rtc.adjust(DateTime(new_time));
-        dst = true;
-        note("Smart set to summer time");
-        saveSettings();
-        getSunriseSunset(now.day());
-      }
-      if (now.month() == 10 && now.day() > 24 && days_of_the_week[now.dayOfTheWeek()][0] == 's' && current_time == 180 && dst) {
-        int new_time = now.unixtime() - 3600;
-        rtc.adjust(DateTime(new_time));
-        dst = false;
-        note("Smart set to winter time");
-        saveSettings();
-        getSunriseSunset(now.day());
-      }
-    }
-
-    if (current_time == 60 && now.second() == 0) {
-      if (last_accessed_log++ > 14) {
-        deactivationTheLog();
-      }
-    }
-
-    if (current_time == (WiFi.localIP()[3] / 2) && now.second() == 0) {
-      checkForUpdate(false);
-    }
-  }
-
-  int i = -1;
-  String old_state = getValue();
-  while (++i < smart_count) {
-    if (smart_array[i].enabled && (strContains(smart_array[i].days, "w") || (RTCisrunning() && strContains(smart_array[i].days, days_of_the_week[now.dayOfTheWeek()])))) {
-      if (smart_array[i].at_night) {
-        if (light_changed) {
-          result = also_sensors ? twilight : smart_array[i].react_to_cloudiness && cloudiness;
-        } else {
-          result = twilight && current_time == (next_sunset + dusk_delay) && current_time > -1 && smart_array[i].access + 60 < now.unixtime();
-        }
-        result &= !smart_array[i].at_night_and_time || (smart_array[i].at_night_and_time && smart_array[i].time < current_time && current_time > -1);
-
-        if (result) {
-          if (strContains(smart_array[i].lights, "1")) {
-            light1 = smart_array[i].target > -1 ? strContains(smart_array[i].target, "1") : true;
-          }
-          if (strContains(smart_array[i].lights, "2")) {
-            light2 = smart_array[i].target > -1 ? strContains(smart_array[i].target, "1") : true;
-          }
-          log += smart_array[i].target == -1 ? "on" : String(smart_array[i].target);
-          log += " at ";
-          log += light_changed && smart_array[i].react_to_cloudiness && cloudiness ? "cloudiness" : String(light_changed ? "sensor " : "") + "dusk";
-          log += !light_changed && current_time == (next_sunset + dusk_delay) && current_time > -1 && dusk_delay != 0 ? " " + String(dusk_delay) : "";
-          if (smart_array[i].at_night_and_time && twilight) {
-            log += " and time";
-          }
-        }
-      }
-
-      if (!result && smart_array[i].at_day) {
-        if (light_changed) {
-          result = also_sensors ? !twilight : smart_array[i].react_to_cloudiness && !cloudiness;
-        } else {
-          result = !twilight && current_time == (next_sunrise + dawn_delay) && current_time > -1 && smart_array[i].access + 60 < now.unixtime();
-        }
-        result &= smart_array[i].time == -1 || (smart_array[i].time > current_time && current_time > -1);
-        result &= !smart_array[i].at_day_and_time || (smart_array[i].at_day_and_time && smart_array[i].off_time < current_time && current_time > -1);
-
-        if (result) {
-          if (strContains(smart_array[i].lights, "1")) {
-            light1 = smart_array[i].target > -1 ? strContains(smart_array[i].target, "1") : false;
-          }
-          if (strContains(smart_array[i].lights, "2")) {
-            light2 = smart_array[i].target > -1 ? strContains(smart_array[i].target, "1") : false;
-          }
-          log += smart_array[i].target == -1 ? "off" : String(smart_array[i].target);
-          log += " at ";
-          log += light_changed && smart_array[i].react_to_cloudiness && !cloudiness ? "sunshine" : String(light_changed ? "sensor " : "") + "dawn";
-          log += !light_changed && current_time == (next_sunrise + dawn_delay) && current_time > -1 && dawn_delay != 0 ? " " + String(dawn_delay) : "";
-          if (smart_array[i].at_day_and_time && !twilight) {
-            log += " and time";
-          }
-        }
-      }
-
-      if (!result && current_time > -1 && smart_array[i].access + 60 < now.unixtime()) {
-        result = smart_array[i].time == current_time;
-        result &= !smart_array[i].at_night_and_time || (smart_array[i].at_night_and_time && twilight);
-
-        if (result) {
-          if (strContains(smart_array[i].lights, "1")) {
-            light1 = smart_array[i].target > -1 ? strContains(smart_array[i].target, "1") : true;
-          }
-          if (strContains(smart_array[i].lights, "2")) {
-            light2 = smart_array[i].target > -1 ? strContains(smart_array[i].target, "1") : true;
-          }
-          log += smart_array[i].target == -1 ? "on" : String(smart_array[i].target);
-          log += " at time";
-          if (smart_array[i].at_night_and_time) {
-            log += " and dusk";
-          }
-        }
-
-        if (!result) {
-          result = smart_array[i].off_time == current_time;
-          result &= !smart_array[i].at_day_and_time || (smart_array[i].at_day_and_time && !twilight);
-
-          if (result) {
-            if (strContains(smart_array[i].lights, "1")) {
-              light1 = smart_array[i].target > -1 ? strContains(smart_array[i].target, "1") : false;
-            }
-            if (strContains(smart_array[i].lights, "2")) {
-              light2 = smart_array[i].target > -1 ? strContains(smart_array[i].target, "1") : false;
-            }
-            log += smart_array[i].target == -1 ? "off" : String(smart_array[i].target);
-            log += " at time";
-            if (smart_array[i].at_day_and_time) {
-              log += " and dawn";
-            }
-          }
-        }
-      }
-
-      if (result) {
-        smart_array[i].access = now.unixtime();
-      }
-    }
-  }
-
-  if (result && old_state != getValue()) {
-    note(log);
-    setLights("smart", true);
-  }
-  return result;
 }
 
 void setLights(String orderer, bool put_online) {
